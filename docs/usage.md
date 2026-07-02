@@ -5,6 +5,14 @@ with the `declare_units` decorator, the validation policy that governs both,
 validating directly with `check_units`, choosing a registry, and reading declarations
 back off a signature.
 
+> **Do not use `from __future__ import annotations`** in modules that declare
+> units (or [schema](api.html#schema) markers). Declarations are read as *runtime
+> objects* out of the `Annotated` metadata; that `__future__` import stringizes
+> annotations, forcing a re-`eval` that fails (a `NameError` at decoration time)
+> whenever a needed name — e.g. a `TYPE_CHECKING`-only `xarray` import — isn't
+> resolvable at runtime. Python 3.14's deferred-annotation model removes this
+> constraint.
+
 ## Declaring units
 
 A unit is the first `str` found in a `DataArray`'s `Annotated` metadata:

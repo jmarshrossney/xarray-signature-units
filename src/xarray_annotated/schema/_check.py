@@ -26,8 +26,15 @@ class SchemaWarning(UserWarning):
     """Warning issued for a structural mismatch under ``on_mismatch="warn"``."""
 
 
-class SchemaError(ValueError):
-    """Raised for a structural mismatch under ``on_mismatch="error"``."""
+class SchemaError(Exception):
+    """Raised for a structural mismatch under ``on_mismatch="error"``.
+
+    Deliberately **not** a ``ValueError``: a structural mismatch (the *data* fails
+    the declaration) is a distinct event from a malformed *declaration* (an
+    unparseable dtype, duplicate dim names), which raises ``ValueError`` from
+    ``assert_valid_schema``. Keeping them on separate hierarchies means catching
+    one never silently swallows the other.
+    """
 
 
 def assert_valid_schema(marker: SchemaMarker, context: str) -> None:
@@ -69,7 +76,7 @@ def check_dims(da: xr.DataArray, marker: Dims) -> tuple[bool, str]:
         detail = f"dims order mismatch: expected {marker.names}, got {actual}"
     else:
         ok = set(actual) == set(marker.names)
-        detail = f"dims mismatch: expected set {marker.names}, got {actual}"
+        detail = f"dims mismatch: expected {marker.names} in any order, got {actual}"
     return ok, detail
 
 
