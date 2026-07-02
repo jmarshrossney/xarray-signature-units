@@ -1,0 +1,195 @@
+"""Runtime unit validation and conversion.
+
+The "usage side" of the package: given a validation `Policy` and a declared unit
+string (typically read off a signature by `_annotations`), validate an actual
+``DataArray`` against it and convert it into the declared unit. Conversion is
+delegated to pint-xarray's ``.pint`` accessor via the active registry.
+"""
+
+import warnings
+
+import pint
+import xarray as xr
+from pint_xarray.errors import PintExceptionGroup
+
+from ._config import (
+    OnInexact,
+    OnMissing,
+    _validate_on_inexact,
+    _validate_on_missing,
+    get_policy,
+)
+from ._registry import _cf_hint, get_registry
+
+
+class UnitsWarning(UserWarning):
+    """Emitted when a DataArray input cannot be fully unit-validated.
+
+    Raised by `check_units` when an input has a missing or unparseable ``units``
+    attribute and ``on_missing`` is ``"warn"``, or when a value-changing conversion
+    happens under ``on_inexact="warn"``. Subclasses ``UserWarning`` so callers can
+    target it specifically::
+
+        import warnings
+        from xarray_signature_units import UnitsWarning
+        warnings.filterwarnings("error", category=UnitsWarning)
+    """
+
+
+def assert_valid_unit(unit: str, context: str) -> None:
+    """Raise ``ValueError`` if ``unit`` is not parseable by the active registry.
+
+    Used to fail fast at declaration time: a malformed or undefined unit string
+    (a typo such as ``"degrees_C"``, or ``"not_a_unit"``) is rejected as soon as
+    it is declared, rather than only when it is later used to validate data.
+    ``context`` names the offending site (e.g. ``"mymodel input 'vpd_weekly'"``)
+    for the message.
+
+    The registry raises a variety of exception types for bad input
+    (``pint.UndefinedUnitError``, ``AssertionError``, …); all are caught and
+    re-raised as a single, clear ``ValueError``.
+    """
+    try:
+        get_registry().Unit(unit)
+    except Exception as exc:
+        # The registry raises several error types for bad input; normalise them.
+        raise ValueError(
+            f"{context}: declared unit {unit!r} is not a recognised "
+            f"unit ({type(exc).__name__}: {exc}){_cf_hint(unit)}"
+        ) from exc
+
+
+def units_compatible(a: str, b: str) -> bool:
+    """Return whether two unit strings are *dimensionally* compatible.
+
+    Mirrors the runtime conversion semantics of `check_units`: ``"hPa"`` and
+    ``"Pa"`` are compatible (one converts to the other), whereas ``"Pa"`` and
+    ``"kg"`` are not. Both strings are assumed already validated by
+    `assert_valid_unit`.
+    """
+    return get_registry().Unit(a).is_compatible_with(get_registry().Unit(b))
+
+
+def units_equal(a: str, b: str) -> bool:
+    """Return whether two units are the *same* unit (no conversion needed).
+
+    Compares the parsed units, so different spellings of the same unit are equal
+    (``"Pa"`` == ``"pascal"``, ``"1"`` == ``"dimensionless"``) while a prefixed
+    unit differs (``"hPa"`` != ``"Pa"``). This is the distinction the ``on_inexact``
+    axis turns on: a value-changing conversion is one where the units are compatible
+    but *not* equal; equivalent spellings imply no value change.
+    """
+    return get_registry().Unit(a) == get_registry().Unit(b)
+
+
+def check_units(
+    da: xr.DataArray,
+    declared: str,
+    name: str,
+    on_missing: OnMissing | None = None,
+    on_inexact: OnInexact | None = None,
+    qualname: str | None = None,
+) -> xr.DataArray:
+    """Validate and convert an input ``DataArray`` to its declared unit.
+
+    Returns a ``DataArray`` whose data is expressed in ``declared`` and whose
+    ``units`` attribute equals ``declared``.
+
+    Behaviour follows the active `Policy` (`get_policy`); ``on_missing`` and
+    ``on_inexact`` override their axes for this call when given (``None`` defers to
+    the policy). If the policy is disabled the array is returned unchanged.
+
+    - **No parseable unit** — the input has no ``units`` attribute, or one the
+      registry cannot parse (e.g. a non-CF string like ``"fraction"``): follows
+      ``on_missing`` (``"error"`` raises, ``"warn"`` warns and returns unchanged,
+      ``"ignore"`` returns unchanged silently).
+    - **Value-changing conversion** — the unit is dimensionally compatible with
+      ``declared`` but not the same unit (e.g. ``"hPa"`` where ``"Pa"`` is
+      declared): follows ``on_inexact`` (``"error"`` raises, ``"warn"`` warns then
+      converts, ``"convert"`` converts silently). Equivalent spellings
+      (``"pascal"`` for ``"Pa"``) imply no value change and always convert.
+    - **Dimensional mismatch** — two parseable but incompatible units (e.g. a mass
+      where a pressure is declared): always raises ``pint.DimensionalityError``,
+      regardless of policy.
+
+    ``qualname`` names the calling site; when provided it is prepended to warning
+    messages as ``[qualname] ...`` so the source of the warning is identifiable
+    without inspecting the call stack.
+    """
+    pol = get_policy()
+    if not pol.enabled:
+        return da
+    on_missing = (
+        pol.on_missing if on_missing is None else _validate_on_missing(on_missing)
+    )
+    on_inexact = (
+        pol.on_inexact if on_inexact is None else _validate_on_inexact(on_inexact)
+    )
+
+    prefix = f"[{qualname}] " if qualname else ""
+    have = da.attrs.get("units")
+    if have is None:
+        if on_missing == "error":
+            raise ValueError(
+                f"{prefix}input {name!r} has no 'units' attribute "
+                f"(declared {declared!r})"
+            )
+        if on_missing == "warn":
+            warnings.warn(
+                f"{prefix}input {name!r} unvalidated: no 'units' attribute "
+                f"(declared {declared!r})",
+                UnitsWarning,
+                stacklevel=2,
+            )
+        return da
+    try:
+        get_registry().Unit(have)
+    except Exception as exc:
+        # A units attribute that exists but the registry cannot parse can no more be
+        # validated than a missing one; route it through the same on_missing policy
+        # rather than letting an opaque parse error escape (and break a warn run).
+        if on_missing == "error":
+            raise ValueError(
+                f"{prefix}input {name!r} has unparseable 'units' attribute {have!r} "
+                f"(declared {declared!r}): {type(exc).__name__}: {exc}"
+                f"{_cf_hint(have)}"
+            ) from exc
+        if on_missing == "warn":
+            warnings.warn(
+                f"{prefix}input {name!r} unvalidated: unparseable 'units' attribute "
+                f"{have!r} (declared {declared!r}){_cf_hint(have)}",
+                UnitsWarning,
+                stacklevel=2,
+            )
+        return da
+    if units_compatible(have, declared) and not units_equal(have, declared):
+        # Dimensionally compatible but value-changing (e.g. hPa -> Pa).
+        if on_inexact == "error":
+            raise ValueError(
+                f"{prefix}input {name!r}: unit {have!r} differs from declared "
+                f"{declared!r} and on_inexact='error' forbids value-changing conversion"
+            )
+        if on_inexact == "warn":
+            warnings.warn(
+                f"{prefix}input {name!r}: converting {have!r} -> {declared!r} "
+                f"(value-changing)",
+                UnitsWarning,
+                stacklevel=2,
+            )
+    try:
+        converted = da.pint.quantify().pint.to(declared).pint.dequantify()
+    except PintExceptionGroup as group:
+        # pint-xarray wraps conversion failures in an ExceptionGroup; surface the
+        # underlying DimensionalityError directly for a clean, catchable error.
+        dim_errors = [
+            exc for exc in group.exceptions if isinstance(exc, pint.DimensionalityError)
+        ]
+        if dim_errors:
+            err = dim_errors[0]
+            err.add_note(f"while validating input {name!r}")
+            raise err from None
+        raise
+    # dequantify writes pint's canonical unit name (e.g. 'pascal'); restore the
+    # declared unit string so downstream re-parsing uses our spelling.
+    converted.attrs["units"] = declared
+    return converted

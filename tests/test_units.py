@@ -1,0 +1,359 @@
+"""Tests for unit declarations and runtime unit validation (plain-pint registry).
+
+CF/UDUNITS-only cases live in ``test_cf.py``.
+"""
+
+import warnings
+from typing import Annotated, TypedDict
+
+import numpy as np
+import pint
+import pytest
+import xarray as xr
+
+import xarray_signature_units as units
+from xarray_signature_units import _annotations, _check, _config
+
+
+def _da(values, unit=None):
+    """Build a (time, pixel) DataArray, optionally with a units attribute."""
+    arr = np.asarray(values, dtype=float)
+    time = xr.date_range("2020-01-01", periods=arr.shape[0], freq="7D")
+    da = xr.DataArray(
+        arr,
+        dims=("time", "pixel"),
+        coords={"time": time, "pixel": np.arange(arr.shape[1])},
+    )
+    if unit is not None:
+        da.attrs["units"] = unit
+    return da
+
+
+# ---------------------------------------------------------------------------
+# Policy resolution
+# ---------------------------------------------------------------------------
+
+
+class TestPolicy:
+    def test_defaults(self):
+        with units.policy(enabled=None, on_missing=None, on_inexact=None):
+            pol = units.get_policy()
+            assert pol.enabled is True
+            assert pol.on_missing == "warn"
+            assert pol.on_inexact == "convert"
+
+    def test_set_single_axis(self):
+        with units.policy(on_missing="error"):
+            assert units.get_policy().on_missing == "error"
+
+    def test_set_all_axes_at_once(self):
+        with units.policy(enabled=False, on_missing="ignore", on_inexact="error"):
+            pol = units.get_policy()
+            assert pol.enabled is False
+            assert pol.on_missing == "ignore"
+            assert pol.on_inexact == "error"
+
+    def test_context_manager_restores_on_exit(self):
+        with units.policy(on_missing="error"):
+            pass
+        assert units.get_policy().on_missing == "warn"
+
+    def test_env_overrides_process(self, monkeypatch):
+        with units.policy(on_missing="ignore"):
+            monkeypatch.setenv(_config.ON_MISSING_ENV_VAR, "error")
+            assert units.get_policy().on_missing == "error"
+
+    def test_enabled_env_parses_bool(self, monkeypatch):
+        monkeypatch.setenv(_config.ENABLED_ENV_VAR, "off")
+        assert units.get_policy().enabled is False
+
+    def test_invalid_on_missing_raises(self):
+        with pytest.raises(ValueError, match="Invalid on_missing"):
+            units.set_policy(on_missing="bogus")  # type: ignore[arg-type]
+
+    def test_invalid_on_inexact_raises(self):
+        with pytest.raises(ValueError, match="Invalid on_inexact"):
+            units.set_policy(on_inexact="bogus")  # type: ignore[arg-type]
+
+    def test_invalid_enabled_env_raises(self, monkeypatch):
+        monkeypatch.setenv(_config.ENABLED_ENV_VAR, "maybe")
+        with pytest.raises(ValueError, match=_config.ENABLED_ENV_VAR):
+            units.get_policy()
+
+
+# ---------------------------------------------------------------------------
+# Declared-unit validation (fail fast)
+# ---------------------------------------------------------------------------
+
+
+class TestAssertValidUnit:
+    @pytest.mark.parametrize("unit", ["degC", "Pa", "1"])
+    def test_valid_units_pass(self, unit):
+        units.assert_valid_unit(unit, "ctx")  # no raise
+
+    @pytest.mark.parametrize("unit", ["degrees_C", "not_a_unit", "kg/"])
+    def test_invalid_units_raise_with_context(self, unit):
+        with pytest.raises(ValueError, match="not a recognised"):
+            units.assert_valid_unit(unit, "myctx input 'x'")
+
+
+# ---------------------------------------------------------------------------
+# check_units: conversion, round-trip, incompatibility, missing
+# ---------------------------------------------------------------------------
+
+
+class TestCheckUnits:
+    def test_round_trip_preserves_coords_and_stamps_declared(self):
+        da = _da([[1.0, 2.0], [3.0, 4.0]], unit="Pa")
+        out = units.check_units(da, "Pa", "vpd", on_missing="error")
+        assert out.attrs["units"] == "Pa"
+        xr.testing.assert_equal(out["time"], da["time"])
+        xr.testing.assert_equal(out["pixel"], da["pixel"])
+        np.testing.assert_allclose(out.values, da.values)
+
+    def test_conversion_hpa_to_pa(self):
+        da = _da([[10.0, 20.0]], unit="hPa")
+        out = units.check_units(da, "Pa", "vpd", on_missing="error")
+        assert out.attrs["units"] == "Pa"
+        np.testing.assert_allclose(out.values, [[1000.0, 2000.0]])
+
+    def test_incompatible_raises_dimensionality_error(self):
+        da = _da([[1.0, 2.0]], unit="degC")
+        with pytest.raises(pint.DimensionalityError):
+            units.check_units(da, "kg", "x", on_missing="error")
+
+    def test_affine_kelvin_to_celsius(self):
+        da = _da([[300.0, 273.15]], unit="K")
+        out = units.check_units(da, "degC", "temperature", on_missing="error")
+        np.testing.assert_allclose(out.values, [[26.85, 0.0]])
+
+    def test_missing_units_error_raises(self):
+        da = _da([[1.0, 2.0]])
+        with pytest.raises(ValueError, match="no 'units' attribute"):
+            units.check_units(da, "Pa", "vpd", on_missing="error")
+
+    def test_missing_units_warn_warns_and_passes_through(self):
+        da = _da([[1.0, 2.0]])
+        with pytest.warns(UserWarning, match="unvalidated"):
+            out = units.check_units(da, "Pa", "vpd", on_missing="warn")
+        assert "units" not in out.attrs
+        np.testing.assert_array_equal(out.values, da.values)
+
+    def test_unparseable_units_error_raises(self):
+        # A present-but-unparseable units string (a non-pint spelling) cannot be
+        # validated; on_missing="error" reports it clearly rather than letting an
+        # opaque pint parse error escape.
+        da = _da([[1.0, 2.0]], unit="fraction")
+        with pytest.raises(ValueError, match="unparseable 'units' attribute"):
+            units.check_units(da, "1", "clay", on_missing="error")
+
+    def test_unparseable_units_warn_warns_and_passes_through(self):
+        da = _da([[1.0, 2.0]], unit="fraction")
+        with pytest.warns(UserWarning, match="unparseable"):
+            out = units.check_units(da, "1", "clay", on_missing="warn")
+        # Left untouched (its original, un-validatable unit is preserved).
+        assert out.attrs["units"] == "fraction"
+        np.testing.assert_array_equal(out.values, da.values)
+
+    def test_unparseable_units_ignore_passes_through_silently(self):
+        da = _da([[1.0, 2.0]], unit="fraction")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = units.check_units(da, "1", "clay", on_missing="ignore")
+        assert out.attrs["units"] == "fraction"
+        np.testing.assert_array_equal(out.values, da.values)
+
+    def test_missing_units_ignore_passes_through_silently(self):
+        # ignore neither raises (unlike error) nor warns (unlike warn).
+        da = _da([[1.0, 2.0]])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = units.check_units(da, "Pa", "vpd", on_missing="ignore")
+        assert "units" not in out.attrs
+        np.testing.assert_array_equal(out.values, da.values)
+
+    def test_on_inexact_error_forbids_converting_input(self):
+        # hPa where Pa is declared: would scale values, so on_inexact="error" raises.
+        da = _da([[10.0, 20.0]], unit="hPa")
+        with pytest.raises(ValueError, match="on_inexact='error'"):
+            units.check_units(da, "Pa", "vpd", on_inexact="error")
+
+    def test_on_inexact_error_accepts_equivalent_spelling(self):
+        # 'pascal' is the same unit as 'Pa' (no value change), so it still converts.
+        da = _da([[10.0, 20.0]], unit="pascal")
+        out = units.check_units(da, "Pa", "vpd", on_inexact="error")
+        assert out.attrs["units"] == "Pa"
+        np.testing.assert_allclose(out.values, [[10.0, 20.0]])
+
+    def test_on_inexact_error_still_raises_on_incompatible(self):
+        da = _da([[1.0, 2.0]], unit="degC")
+        with pytest.raises(pint.DimensionalityError):
+            units.check_units(da, "kg", "x", on_inexact="error")
+
+    def test_on_inexact_error_forbids_affine_conversion(self):
+        # K -> degC is an *affine* (offset) conversion, not just a scale; it still
+        # changes the values, so on_inexact="error" must reject it like hPa/Pa.
+        da = _da([[300.0]], unit="K")
+        with pytest.raises(ValueError, match="on_inexact='error'"):
+            units.check_units(da, "degC", "temperature", on_inexact="error")
+
+    def test_on_inexact_warn_converts_with_warning(self):
+        # warn converts (unlike error) but announces the value change (unlike convert).
+        da = _da([[10.0, 20.0]], unit="hPa")
+        with pytest.warns(units.UnitsWarning, match="value-changing"):
+            out = units.check_units(da, "Pa", "vpd", on_inexact="warn")
+        assert out.attrs["units"] == "Pa"
+        np.testing.assert_allclose(out.values, [[1000.0, 2000.0]])
+
+    def test_disabled_policy_is_noop(self):
+        # enabled=False short-circuits: the array is returned untouched.
+        da = _da([[10.0, 20.0]], unit="hPa")
+        with units.policy(enabled=False), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = units.check_units(da, "Pa", "vpd", on_missing="error")
+        assert out.attrs["units"] == "hPa"
+        np.testing.assert_allclose(out.values, [[10.0, 20.0]])
+
+
+# ---------------------------------------------------------------------------
+# Dimensional compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestUnitsCompatible:
+    @pytest.mark.parametrize(("a", "b"), [("Pa", "hPa"), ("1", "dimensionless")])
+    def test_compatible(self, a, b):
+        assert _check.units_compatible(a, b)
+
+    @pytest.mark.parametrize(("a", "b"), [("Pa", "kg"), ("mm", "1")])
+    def test_incompatible(self, a, b):
+        assert not _check.units_compatible(a, b)
+
+
+class TestUnitsEqual:
+    @pytest.mark.parametrize(("a", "b"), [("Pa", "pascal"), ("1", "dimensionless")])
+    def test_equal(self, a, b):
+        assert _check.units_equal(a, b)
+
+    @pytest.mark.parametrize(("a", "b"), [("hPa", "Pa"), ("g", "kg"), ("degC", "K")])
+    def test_not_equal(self, a, b):
+        # Compatible but value-changing → not equal.
+        assert _check.units_compatible(a, b)
+        assert not _check.units_equal(a, b)
+
+
+# ---------------------------------------------------------------------------
+# units_from_signature: reading declarations off a function's annotations
+# ---------------------------------------------------------------------------
+
+
+class TestUnitsFromSignature:
+    def test_extracts_inputs_and_typeddict_outputs(self):
+        class Out(TypedDict):
+            gpp: Annotated[xr.DataArray, "g m-2 d-1"]
+            lue: Annotated[xr.DataArray, "g MJ-1"]
+
+        def node(
+            temp: Annotated[xr.DataArray, "degC"],
+            plain: xr.DataArray,
+            scalar: int = 3,
+        ) -> Out: ...
+
+        inputs, outputs = units.units_from_signature(node)
+        # Only Annotated params with a string unit contribute; others are ignored.
+        assert inputs == {"temp": "degC"}
+        assert outputs == {"gpp": "g m-2 d-1", "lue": "g MJ-1"}
+
+    def test_bare_annotated_return(self):
+        def node(x: Annotated[xr.DataArray, "1"]) -> Annotated[xr.DataArray, "1"]: ...
+
+        inputs, outputs = units.units_from_signature(node)
+        assert inputs == {"x": "1"}
+        assert outputs == "1"
+
+    def test_no_annotations(self):
+        def node(x: xr.DataArray) -> xr.DataArray: ...
+
+        inputs, outputs = units.units_from_signature(node)
+        assert inputs == {}
+        assert outputs is None
+
+    def test_partial_typeddict_only_annotated_fields_contribute(self):
+        # A node with a mix of unit-carrying and metadata-free outputs: only the
+        # annotated fields appear in the declared output units.
+        class Out(TypedDict):
+            gpp: Annotated[xr.DataArray, "g m-2 d-1"]
+            diagnostic: xr.DataArray  # no unit annotation
+
+        def node() -> Out: ...
+
+        _, outputs = units.units_from_signature(node)
+        assert outputs == {"gpp": "g m-2 d-1"}
+
+    def test_metadata_on_non_dataarray_param_is_not_a_unit(self):
+        # A descriptive string on a *non-DataArray* parameter is metadata, not a
+        # unit: only DataArray annotations carry units. So a config param like a
+        # documented flag is ignored.
+        def node(flag: Annotated[bool, "toggles X"] = True) -> xr.DataArray: ...
+
+        inputs, _ = units.units_from_signature(node)
+        assert inputs == {}
+
+    def test_unit_then_description_takes_unit_first(self):
+        # Extra metadata after the unit (e.g. a human-readable description) is
+        # ignored: the unit is the first string. This is the supported way to
+        # attach both a unit and a description to a parameter.
+        def node(
+            v: Annotated[xr.DataArray, "m s-1", "z component of velocity"],
+        ) -> xr.DataArray: ...
+
+        inputs, _ = units.units_from_signature(node)
+        assert inputs == {"v": "m s-1"}
+        units.assert_valid_unit(inputs["v"], "v")  # no raise: description ignored
+
+    def test_non_string_metadata_before_unit_is_skipped(self):
+        # Only strings are considered; a non-string marker before the unit string
+        # does not shadow it.
+        def node(v: Annotated[xr.DataArray, 42, "m s-1"]) -> xr.DataArray: ...
+
+        inputs, _ = units.units_from_signature(node)
+        assert inputs == {"v": "m s-1"}
+
+    def test_description_before_unit_is_misread_and_fails_fast(self):
+        # The convention is unit-first. A description placed *before* the unit is
+        # mis-read as the unit -- but it fails loudly rather than passing silently
+        # (unless the description itself parses as a unit).
+        def node(
+            v: Annotated[xr.DataArray, "z component of velocity", "m s-1"],
+        ) -> xr.DataArray: ...
+
+        inputs, _ = units.units_from_signature(node)
+        assert inputs == {"v": "z component of velocity"}
+        with pytest.raises(ValueError, match="not a recognised"):
+            units.assert_valid_unit(inputs["v"], "v")
+
+    def test_unit_on_optional_dataarray_param_is_read(self):
+        # An optional DataArray (DataArray | None) still carries its declared unit.
+        def node(
+            x: Annotated[xr.DataArray | None, "g m-2"] = None,
+        ) -> xr.DataArray: ...
+
+        inputs, _ = units.units_from_signature(node)
+        assert inputs == {"x": "g m-2"}
+
+
+# ---------------------------------------------------------------------------
+# unwrap_annotated: seeing through unit metadata to the base type
+# ---------------------------------------------------------------------------
+
+
+class TestUnwrapAnnotated:
+    def test_unwraps_annotated_to_base_type(self):
+        assert (
+            _annotations.unwrap_annotated(Annotated[xr.DataArray, "degC"])
+            is xr.DataArray
+        )
+
+    def test_passes_through_plain_types(self):
+        assert _annotations.unwrap_annotated(xr.DataArray) is xr.DataArray
+        assert _annotations.unwrap_annotated(int) is int

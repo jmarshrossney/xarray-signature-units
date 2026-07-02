@@ -14,11 +14,11 @@ copyright = """
 Copyright &copy; 2026 Joe Marsh Rossney
 """
 
-# nav = [
-#   { "Home" = "index.md" },
-#   { "Getting Started" = "getting_started.md" },
-#   { "Example" = "example.md" },
-# ]
+nav = [
+  { "Home" = "index.md" },
+  { "Usage" = "usage.md" },
+  { "API Reference" = "api.md"},
+]
 
 [project.theme]
 
@@ -52,7 +52,7 @@ features = [
     "navigation.tracking",
     "search.highlight",
     # "toc.follow",
-    #"toc.integrate",
+    "toc.integrate",
 ]
 
 [project.theme.icon]
@@ -111,3 +111,29 @@ combine_header_slug = true
 [project.markdown_extensions.pymdownx.tasklist]
 custom_checkbox = true
 [project.markdown_extensions.pymdownx.tilde]
+
+# Mkdocstrings
+# ------------
+
+[project.plugins.mkdocstrings.handlers.python]
+inventories = ["https://docs.python.org/3/objects.inv"]
+paths = ["src"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+annotations_path = "brief"
+docstring_style = "google"
+docstring_section_style = "list"
+inherited_members = true
+line_length = 88
+merge_init_into_class = true
+separate_signature = true
+show_signature = true
+signature_crossrefs = true
+show_signature_annotations = true
+show_if_no_docstring = false
+show_root_full_path = true
+show_root_heading = true
+show_root_members_full_path = false
+show_source = false
+show_symbol_type_heading = true
+show_symbol_type_toc = true
