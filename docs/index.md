@@ -11,7 +11,7 @@ unit is checked and coerced whenever the function runs.
 ([cf-xarray](https://cf-xarray.readthedocs.io) is an optional dependency for CF/UDUNITS unit
 strings.)
 
-!!! note "Scope: units today, full schema tomorrow"
+!!! note
 
     Right now `xarray-annotated` supports declaring and validating physical **units**
     only. The intention is to grow it to cover a DataArray's full xarray *schema* — its
