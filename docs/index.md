@@ -49,8 +49,9 @@ declaration and validation/conversion of units on `xarray.DataArray`s.
 Specifically,
 
 1. Letting you declare the expected unit of a `DataArray` **in the function signature** —
-   `Annotated[xr.DataArray, "Pa"]` — so the unit is part of the contract, written in exactly one
-   place.
+   `Annotated[xr.DataArray, "Pa"]`, or the self-identifying `Annotated[xr.DataArray, Unit("Pa")]`
+   marker that composes cleanly with other `Annotated` metadata markers — so the unit is part of
+   the contract, written in exactly one place.
 2. Validating and converting arrays against those declarations at run time, under a switchable
    policy, via the `@declare_units` decorator (or the `check_units` primitive it is built on).
 

@@ -12,6 +12,7 @@ import pint
 import xarray as xr
 from pint_xarray.errors import PintExceptionGroup
 
+from ._annotations import Unit
 from ._config import (
     OnInexact,
     OnMissing,
@@ -38,19 +39,23 @@ class UnitsWarning(UserWarning):
     """
 
 
-def assert_valid_unit(unit: str, context: str) -> None:
+def assert_valid_unit(unit: str | Unit, context: str) -> None:
     """Raise `ValueError` if `unit` is not parseable by the active registry.
 
     Used to fail fast at declaration time: a malformed or undefined unit string
     (a typo such as `"degrees_C"`, or `"not_a_unit"`) is rejected as soon as it
     is declared, rather than only when it is later used to validate data.
 
+    Accepts either a bare unit string or a `Unit` marker (its `.unit` string is
+    validated), so a consumer that read a `Unit` off an annotation can pass it
+    straight through.
+
     The registry raises a variety of exception types for bad input
     (`pint.UndefinedUnitError`, `AssertionError`, …); all are caught and
     re-raised as a single, clear `ValueError`.
 
     Args:
-        unit: The unit string to validate.
+        unit: The unit string (or `Unit` marker) to validate.
         context: Names the offending site (e.g. `"mymodel input 'vpd_weekly'"`)
             for the error message.
 
@@ -64,6 +69,8 @@ def assert_valid_unit(unit: str, context: str) -> None:
     ...
     ValueError
     """
+    if isinstance(unit, Unit):
+        unit = unit.unit
     try:
         get_registry().Unit(unit)
     except Exception as exc:

@@ -357,3 +357,104 @@ class TestUnwrapAnnotated:
     def test_passes_through_plain_types(self):
         assert _annotations.unwrap_annotated(xr.DataArray) is xr.DataArray
         assert _annotations.unwrap_annotated(int) is int
+
+
+# ---------------------------------------------------------------------------
+# Unit typed marker: self-identifying, composable alternative to the bare string
+# ---------------------------------------------------------------------------
+
+
+class TestUnitMarker:
+    def test_marker_resolves_to_unit_string(self):
+        assert (
+            _annotations.annotated_unit(Annotated[xr.DataArray, units.Unit("degC")])
+            == "degC"
+        )
+
+    def test_marker_and_string_resolve_identically(self):
+        marker = _annotations.annotated_unit(Annotated[xr.DataArray, units.Unit("Pa")])
+        string = _annotations.annotated_unit(Annotated[xr.DataArray, "Pa"])
+        assert marker == string == "Pa"
+
+    def test_marker_wins_over_string_string_first(self):
+        # The typed marker owns its slot regardless of ordering.
+        assert (
+            _annotations.annotated_unit(
+                Annotated[xr.DataArray, "degC", units.Unit("Pa")]
+            )
+            == "Pa"
+        )
+
+    def test_marker_wins_over_string_marker_first(self):
+        assert (
+            _annotations.annotated_unit(
+                Annotated[xr.DataArray, units.Unit("Pa"), "degC"]
+            )
+            == "Pa"
+        )
+
+    def test_marker_on_non_dataarray_is_not_a_unit(self):
+        # A Unit marker on a non-DataArray param is not a unit (no leak), just as
+        # a descriptive string on such a param is not.
+        assert _annotations.annotated_unit(Annotated[bool, units.Unit("degC")]) is None
+
+    def test_dataarray_with_no_unit_or_string_metadata_is_none(self):
+        # A DataArray annotated only with non-string, non-Unit metadata declares
+        # no unit.
+        assert _annotations.annotated_unit(Annotated[xr.DataArray, 42]) is None
+
+    def test_marker_round_trips_through_signature_as_str(self):
+        class Out(TypedDict):
+            gpp: Annotated[xr.DataArray, units.Unit("g m-2 d-1")]
+
+        def node(
+            temp: Annotated[xr.DataArray, units.Unit("degC")],
+        ) -> Out: ...
+
+        inputs, outputs = units.units_from_signature(node)
+        # Resolved to plain strings, exactly as the bare-string form.
+        assert inputs == {"temp": "degC"}
+        assert isinstance(inputs["temp"], str)
+        assert outputs == {"gpp": "g m-2 d-1"}
+
+    def test_marker_bare_return_round_trips_as_str(self):
+        def node(
+            x: Annotated[xr.DataArray, units.Unit("1")],
+        ) -> Annotated[xr.DataArray, units.Unit("1")]: ...
+
+        inputs, outputs = units.units_from_signature(node)
+        assert inputs == {"x": "1"}
+        assert outputs == "1"
+
+    def test_assert_valid_unit_accepts_marker(self):
+        units.assert_valid_unit(units.Unit("degC"), "ctx")  # no raise
+
+    def test_assert_valid_unit_rejects_invalid_marker(self):
+        with pytest.raises(ValueError, match="not a recognised"):
+            units.assert_valid_unit(units.Unit("not_a_unit"), "ctx")
+
+    def test_declare_units_end_to_end_with_marker_input_and_output(self):
+        @units.declare_units
+        def f(
+            p: Annotated[xr.DataArray, units.Unit("Pa")],
+        ) -> Annotated[xr.DataArray, units.Unit("Pa")]:
+            return p
+
+        out = f(_da([[10.0, 20.0]], unit="hPa"))
+        assert out.attrs["units"] == "Pa"
+        np.testing.assert_allclose(out.values, [[1000.0, 2000.0]])
+
+    def test_repr(self):
+        assert repr(units.Unit("degC")) == "Unit('degC')"
+
+    def test_equality(self):
+        assert units.Unit("degC") == units.Unit("degC")
+        assert units.Unit("degC") != units.Unit("K")
+        # Comparison with a plain string is not equal (NotImplemented -> identity).
+        assert units.Unit("degC") != "degC"
+
+    def test_annotation_with_marker_is_hashable(self):
+        # Regression guard: a Unit marker must not make the Annotated hint
+        # unhashable (would break tools that cache/hash annotations).
+        hash(Annotated[xr.DataArray, units.Unit("degC")])
+        assert hash(units.Unit("degC")) == hash(units.Unit("degC"))

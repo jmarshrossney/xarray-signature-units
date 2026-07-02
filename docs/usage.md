@@ -14,6 +14,22 @@ Annotated[xr.DataArray, "degC"]
 Annotated[xr.DataArray, "m s-1", "z component of velocity"]  # description after the unit is ignored
 ```
 
+Equivalently, wrap it in the self-identifying `Unit` marker. This is the
+order-independent form: the unit owns its own slot, so it stays unambiguous
+even when other typed metadata shares the annotation — useful when composing
+with other `Annotated`-based tooling.
+
+```python
+from xarray_signature_units import Unit
+
+Annotated[xr.DataArray, Unit("degC")]
+Annotated[xr.DataArray, "note", Unit("Pa")]  # marker wins regardless of order → "Pa"
+```
+
+Both forms resolve to the same unit string; use whichever reads better. A `Unit`
+marker takes priority over a bare string when both are present, and a description
+string still comes *after* the unit in the bare-string form.
+
 The declared units of a whole function are read back with
 [`units_from_signature`](#reading-declarations-off-a-signature-units_from_signature)
 — the single source that both `@declare_units` and any static checker consume, so a

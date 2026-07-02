@@ -3,7 +3,7 @@
 Run-time validation of pint/CF units declared in signature annotations on xarray DataArrays.
 """
 
-from ._annotations import units_from_signature
+from ._annotations import Unit, units_from_signature
 from ._check import (
     UnitsWarning,
     assert_valid_unit,
@@ -23,6 +23,7 @@ from ._registry import (
 
 __all__ = [
     "Policy",
+    "Unit",
     "UnitsWarning",
     "assert_valid_unit",
     "check_units",
