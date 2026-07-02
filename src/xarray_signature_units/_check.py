@@ -22,6 +22,16 @@ from ._config import (
 )
 from ._registry import _cf_hint, get_registry
 
+#: Upper bound on the length of a unit string we are willing to hand to pint's
+#: parser. Real units are short (``"umol m-2 s-1"`` is 12 chars); anything far
+#: longer is not a unit. pint's parser is not hardened against adversarial input
+#: and can hang on pathological strings (e.g. a single very long token), so an
+#: over-long ``units`` attribute read from an untrusted file must be refused
+#: *before* it reaches the parser rather than after. This does not defend against
+#: every DoS input pint accepts (a short string can still be pathological, e.g.
+#: nested numeric exponentiation), only the length-driven class.
+_MAX_UNIT_LEN = 256
+
 
 class UnitsWarning(UserWarning):
     """Emitted when a DataArray input cannot be fully unit-validated.
@@ -70,6 +80,12 @@ def assert_valid_unit(unit: str | Unit, context: str) -> None:
     """
     if isinstance(unit, Unit):
         unit = unit.unit
+    if len(unit) > _MAX_UNIT_LEN:
+        # Refuse before parsing: an over-long unit string can hang pint's parser.
+        raise ValueError(
+            f"{context}: declared unit is over-long "
+            f"({len(unit)} chars > {_MAX_UNIT_LEN}); refusing to parse"
+        )
     try:
         get_registry().Unit(unit)
     except Exception as exc:
@@ -216,6 +232,24 @@ def check_units(
             warnings.warn(
                 f"{prefix}input {name!r} unvalidated: no 'units' attribute "
                 f"(declared {declared!r})",
+                UnitsWarning,
+                stacklevel=2,
+            )
+        return da
+    if isinstance(have, str) and len(have) > _MAX_UNIT_LEN:
+        # An over-long units attribute can hang pint's parser (DoS); refuse it
+        # *before* parsing and route it through on_missing like any other input we
+        # cannot validate. Never echo `have` in the message -- it may be huge.
+        if on_missing == "error":
+            raise ValueError(
+                f"{prefix}input {name!r} has an over-long 'units' attribute "
+                f"({len(have)} chars > {_MAX_UNIT_LEN}; declared {declared!r}); "
+                f"refusing to parse"
+            )
+        if on_missing == "warn":
+            warnings.warn(
+                f"{prefix}input {name!r} unvalidated: over-long 'units' attribute "
+                f"({len(have)} chars > {_MAX_UNIT_LEN}; declared {declared!r})",
                 UnitsWarning,
                 stacklevel=2,
             )

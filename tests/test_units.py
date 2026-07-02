@@ -96,6 +96,13 @@ class TestAssertValidUnit:
         with pytest.raises(ValueError, match="not a recognised"):
             units.assert_valid_unit(unit, "myctx input 'x'")
 
+    def test_over_long_unit_refused_before_parsing(self):
+        # A pathologically long unit string can hang pint's parser (DoS); it is
+        # rejected on length *before* being handed to the parser.
+        over_long = "e" * (_check._MAX_UNIT_LEN + 1)
+        with pytest.raises(ValueError, match="over-long"):
+            units.assert_valid_unit(over_long, "ctx")
+
 
 # ---------------------------------------------------------------------------
 # check_units: conversion, round-trip, incompatibility, missing
@@ -212,6 +219,47 @@ class TestCheckUnits:
             warnings.simplefilter("error")
             out = units.check_units(da, "Pa", "vpd", on_missing="error")
         assert out.attrs["units"] == "hPa"
+        np.testing.assert_allclose(out.values, [[10.0, 20.0]])
+
+    def test_over_long_units_attribute_error_raises_without_parsing(self):
+        # A units attribute from an untrusted file can be crafted to hang pint's
+        # parser (DoS). An over-long one is refused on length, before parsing,
+        # and routed through on_missing (here: error). This must return quickly.
+        da = _da([[1.0, 2.0]], unit="e" * (_check._MAX_UNIT_LEN + 1))
+        with pytest.raises(ValueError, match="over-long 'units' attribute"):
+            units.check_units(da, "Pa", "vpd", on_missing="error")
+
+    def test_over_long_units_attribute_warn_passes_through(self):
+        da = _da([[1.0, 2.0]], unit="e" * (_check._MAX_UNIT_LEN + 1))
+        with pytest.warns(units.UnitsWarning, match="over-long"):
+            out = units.check_units(da, "Pa", "vpd", on_missing="warn")
+        # Left untouched: its (un-validatable) unit is preserved, values unchanged.
+        assert len(out.attrs["units"]) == _check._MAX_UNIT_LEN + 1
+        np.testing.assert_array_equal(out.values, da.values)
+
+    def test_over_long_units_attribute_ignore_passes_through_silently(self):
+        da = _da([[1.0, 2.0]], unit="e" * (_check._MAX_UNIT_LEN + 1))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = units.check_units(da, "Pa", "vpd", on_missing="ignore")
+        np.testing.assert_array_equal(out.values, da.values)
+
+    def test_over_long_error_message_does_not_echo_the_unit(self):
+        # The message must report the length, not the (potentially huge) string.
+        over_long = "e" * (_check._MAX_UNIT_LEN + 1)
+        da = _da([[1.0, 2.0]], unit=over_long)
+        with pytest.raises(ValueError) as excinfo:
+            units.check_units(da, "Pa", "vpd", on_missing="error")
+        assert over_long not in str(excinfo.value)
+
+    def test_max_length_unit_still_parses(self):
+        # Boundary: a unit exactly at the cap is not rejected on length; a valid
+        # (if verbose) unit padded with harmless factors of 1 still validates.
+        unit = "Pa" + " * 1" * 60  # dimensionally Pa, well under the cap
+        assert len(unit) <= _check._MAX_UNIT_LEN
+        da = _da([[10.0, 20.0]], unit=unit)
+        out = units.check_units(da, "Pa", "vpd", on_missing="error")
+        assert out.attrs["units"] == "Pa"
         np.testing.assert_allclose(out.values, [[10.0, 20.0]])
 
 
