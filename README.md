@@ -90,3 +90,16 @@ just      # lint, typecheck, test, build docs
 ```
 
 See the `justfile` for individual targets (`just lint`, `just test`, `just test-cov`, ...).
+
+### Pre-commit hooks
+
+A `.pre-commit-config.yaml` is included to run the same linting (ruff) and type-checking (pyright) steps on every commit. Install the hooks with:
+
+```sh
+uv run pre-commit install
+```
+
+The hooks defined are:
+- `uv-lock` — keeps the lockfile in sync with `pyproject.toml`.
+- `pyright` — static type checking.
+- `ruff-format` / `ruff-check` — formatting and linting with auto-fix.
