@@ -4,11 +4,13 @@ _: lint typecheck test doctest docs
 lint:
   ruff format
   ruff check --fix
+  marimo check --fix examples/notebook.py
 
 # Variant of `lint` that doesn't cause any changes to files.
 lint-check:
   ruff format --check
   ruff check
+  marimo check examples/notebook.py
 
 # Run static type checker.
 typecheck:
@@ -28,4 +30,5 @@ doctest:
 
 # Build the documentation using Zensical.
 docs:
+  marimo-md-export examples/notebook.py docs/example.md
   zensical build
