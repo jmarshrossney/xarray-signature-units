@@ -205,6 +205,51 @@ class TestCheckDtype:
 
 
 # ---------------------------------------------------------------------------
+# Marker-vs-marker compatibility (no array in hand)
+# ---------------------------------------------------------------------------
+
+
+class TestDimsCompatible:
+    def test_public_api(self):
+        assert schema.dims_compatible is _check.dims_compatible
+
+    def test_same_set_any_order(self):
+        assert schema.dims_compatible(Dims("x", "y"), Dims("y", "x"))
+
+    def test_different_set(self):
+        assert not schema.dims_compatible(Dims("x"), Dims("x", "y"))
+
+    def test_both_ordered_order_differs(self):
+        a = Dims("x", "y", ordered=True)
+        b = Dims("y", "x", ordered=True)
+        assert not schema.dims_compatible(a, b)
+
+    def test_one_side_loose_order(self):
+        # Only one side pins order → not provably inconsistent.
+        assert schema.dims_compatible(Dims("x", "y", ordered=True), Dims("y", "x"))
+
+
+class TestDtypeCompatible:
+    def test_public_api(self):
+        assert schema.dtype_compatible is _check.dtype_compatible
+
+    def test_same_kind_different_width(self):
+        assert schema.dtype_compatible(Dtype("float64"), Dtype("float32"))
+
+    def test_different_kind(self):
+        assert not schema.dtype_compatible(Dtype("float64"), Dtype("int64"))
+
+    def test_both_exact_differ(self):
+        a = Dtype("float64", exact=True)
+        b = Dtype("float32", exact=True)
+        assert not schema.dtype_compatible(a, b)
+
+    def test_one_side_loose(self):
+        # Only one side requires exact → width mismatch is not provably inconsistent.
+        assert schema.dtype_compatible(Dtype("float64", exact=True), Dtype("float32"))
+
+
+# ---------------------------------------------------------------------------
 # check_schema router behaviour
 # ---------------------------------------------------------------------------
 

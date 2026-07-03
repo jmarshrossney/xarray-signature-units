@@ -23,6 +23,8 @@ from ._check import (
     SchemaWarning,
     assert_valid_schema,
     check_schema,
+    dims_compatible,
+    dtype_compatible,
 )
 from ._config import (
     Policy,
@@ -42,6 +44,8 @@ __all__ = [
     "assert_valid_schema",
     "check_schema",
     "declare_schema",
+    "dims_compatible",
+    "dtype_compatible",
     "get_policy",
     "policy",
     "schema_from_signature",

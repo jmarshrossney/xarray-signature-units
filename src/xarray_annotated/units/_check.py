@@ -112,7 +112,7 @@ def units_compatible(a: str, b: str) -> bool:
         `True` if the units are dimensionally compatible.
 
     Examples:
-        >>> from xarray_annotated.units._check import units_compatible
+        >>> from xarray_annotated.units import units_compatible
         >>> units_compatible("hPa", "Pa")
         True
         >>> units_compatible("Pa", "kg")
@@ -138,7 +138,7 @@ def units_equal(a: str, b: str) -> bool:
         `True` if the units are the same (no conversion needed).
 
     Examples:
-        >>> from xarray_annotated.units._check import units_equal
+        >>> from xarray_annotated.units import units_equal
         >>> units_equal("Pa", "pascal")
         True
         >>> units_equal("hPa", "Pa")
