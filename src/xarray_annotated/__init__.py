@@ -18,10 +18,14 @@ here, so the domains never collide in a shared namespace::
 The only names surfaced at the top level are domain-*agnostic* helpers that
 belong to no single domain: ``annotate`` (the shared declaration writer, inverse
 of each domain's ``*_from_signature`` reader) and the ``Annotated`` introspection
-kernel (``unwrap_annotated``).  No domain-specific name is re-exported here.
+kernel (``unwrap_annotated``, ``walk_signature``).  ``walk_signature`` is the
+shared driver behind both domains' readers, so a third-party facet author can use
+it to build their own ``*_from_signature`` reader.  No domain-specific name is
+re-exported here.
 """
 
 from . import schema, units
+from ._annotations import unwrap_annotated, walk_signature
 from ._writer import annotate
 
-__all__ = ["annotate", "schema", "units"]
+__all__ = ["annotate", "schema", "units", "unwrap_annotated", "walk_signature"]
