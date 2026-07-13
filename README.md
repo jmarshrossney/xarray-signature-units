@@ -33,6 +33,9 @@ normalise_pressure(p)
 
 For full user documentation please visit **[https://jmarshrossney.github.io/xarray-annotated/](https://jmarshrossney.github.io/xarray-annotated/)**.
 
+> [!WARNING]
+> This is a hastily vibe-coded package that serves an immediate purpose for me, so expect sharp edges, confusing code and documentation until I can get round to rewriting it more thoroughly, hopefully in the next few weeks (13/07/26).
+
 ## Motivations
 
 `xarray.DataArray` objects carry properties that matter for correctness but are invisible to the type system: dimensions, coordinates, and dtype are structural assertions that every array makes, and the `units` attribute (`"hPa"`, `"degC"`, `"g m-2 d-1"`) carries a physical unit. xarray itself doesn't enforce any of these contracts at call sites — it's easy to swap dims, feed an integer array where a float is expected, or mix `hPa`/`Pa` — and while [pint](https://pint.readthedocs.io/en/stable/) / [pint-xarray](https://pint-xarray.readthedocs.io) provide unit arithmetic and conversion, they don't *declare* or *enforce* unit expectations either. `xarray-annotated` moves all of these expectations into the function signature — the contract — and enforces them transparently at run time:
